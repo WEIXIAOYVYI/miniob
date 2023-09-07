@@ -150,7 +150,7 @@ class MiniObServer:
     '''
     observer程序所在路径
     '''
-    return base_dir + "/bin/observer"
+    return base_dir + "/build/bin/observer"
 
   def __default_config(self, base_dir: str):
     return base_dir + "/etc/observer.ini"
