@@ -229,3 +229,71 @@ private:
   std::vector<TupleCellSpec *> speces_;
   Tuple *tuple_ = nullptr;
 };
+
+// Aggregation Tuple
+
+class AggrTuple : public Tuple
+{
+public:
+  AggrTuple() = default;
+  virtual ~AggrTuple()
+  {
+    for (TupleCellSpec *spec : speces_) {
+      delete spec;
+    }
+    speces_.clear();
+  }
+
+  void add_cell_spec(TupleCellSpec *spec)
+  {
+    speces_.push_back(spec);
+  }
+  int cell_num() const override
+  {
+    return speces_.size();
+  }
+
+  RC cell_at(int index, TupleCell &cell) const override
+  {
+    if (index < 0 || index >= static_cast<int>(speces_.size())) {
+      return RC::GENERIC_ERROR;
+    }
+
+    const TupleCellSpec *spec = speces_[index];
+    Tuple *tuple = nullptr;
+    return spec->expression()->get_value(*tuple, cell);
+  }
+
+  RC find_cell(const Field &field, TupleCell &cell) const override
+  {
+    return RC::SUCCESS;
+  }
+  RC cell_spec_at(int index, const TupleCellSpec *&spec) const override
+  {
+    if (index < 0 || index >= static_cast<int>(speces_.size())) {
+      return RC::NOTFOUND;
+    }
+    spec = speces_[index];
+    return RC::SUCCESS;
+  }
+
+  RC update_cell(Tuple *tuple_update, int count_star_start, int count_star_num) {
+    const int cell_num = tuple_update->cell_num();
+    TupleCell cell;
+    for (int i = 0;i < cell_num;i++) {
+      if (i >= count_star_start + 1 && i < count_star_start + count_star_num) {
+        continue;
+      }
+      auto rc = tuple_update->cell_at(i, cell);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to fetch field of cell. index=%d, rc=%s", i, strrc(rc));
+        break;
+      }
+      ((AggrExpr*)(speces_[i]->expression()))->update_tuple_cell(cell);
+    }
+    return RC::SUCCESS;
+  }
+
+private:
+  std::vector<TupleCellSpec *> speces_;
+};

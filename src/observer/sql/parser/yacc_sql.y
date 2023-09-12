@@ -102,6 +102,10 @@ ParserContext *get_context(yyscan_t scanner)
         LE
         GE
         NE
+		MAX
+		MIN
+		COUNT
+		AVG
 
 %union {
   struct _Attr *attr;
@@ -356,32 +360,82 @@ select:				/*  select 语句的语法解析树*/
 select_attr:
     STAR {  
 			RelAttr attr;
-			relation_attr_init(&attr, NULL, "*");
+			relation_attr_init(&attr, NULL, "*", NOAGGR);
 			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
 		}
+	| COUNT LBRACE STAR RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, "*", COUNTSTARAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| MAX LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $3, MAXAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| MIN LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $3, MINAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| COUNT LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $3, COUNTAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| AVG LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $3, AVGAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
     | ID attr_list {
 			RelAttr attr;
-			relation_attr_init(&attr, NULL, $1);
+			relation_attr_init(&attr, NULL, $1, NOAGGR);
 			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
 		}
   	| ID DOT ID attr_list {
 			RelAttr attr;
-			relation_attr_init(&attr, $1, $3);
+			relation_attr_init(&attr, $1, $3, NOAGGR);
 			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
 		}
     ;
 attr_list:
     /* empty */
+	| COMMA COUNT LBRACE STAR RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, "*", COUNTSTARAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| COMMA MAX LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $4, MAXAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| COMMA MIN LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $4, MINAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| COMMA COUNT LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $4, COUNTAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
+	| COMMA AVG LBRACE ID RBRACE attr_list {
+			RelAttr attr;
+			relation_attr_init(&attr, NULL, $4, AVGAGGR);
+			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
+	}
     | COMMA ID attr_list {
 			RelAttr attr;
-			relation_attr_init(&attr, NULL, $2);
+			relation_attr_init(&attr, NULL, $2, NOAGGR);
 			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
      	  // CONTEXT->ssql->sstr.selection.attributes[CONTEXT->select_length].relation_name = NULL;
         // CONTEXT->ssql->sstr.selection.attributes[CONTEXT->select_length++].attribute_name=$2;
       }
     | COMMA ID DOT ID attr_list {
 			RelAttr attr;
-			relation_attr_init(&attr, $2, $4);
+			relation_attr_init(&attr, $2, $4, NOAGGR);
 			selects_append_attribute(&CONTEXT->ssql->sstr.selection, &attr);
         // CONTEXT->ssql->sstr.selection.attributes[CONTEXT->select_length].attribute_name=$4;
         // CONTEXT->ssql->sstr.selection.attributes[CONTEXT->select_length++].relation_name=$2;
@@ -410,7 +464,7 @@ condition:
     ID comOp value 
 		{
 			RelAttr left_attr;
-			relation_attr_init(&left_attr, NULL, $1);
+			relation_attr_init(&left_attr, NULL, $1, NOAGGR);
 
 			Value *right_value = &CONTEXT->values[CONTEXT->value_length - 1];
 
@@ -451,9 +505,9 @@ condition:
 		|ID comOp ID 
 		{
 			RelAttr left_attr;
-			relation_attr_init(&left_attr, NULL, $1);
+			relation_attr_init(&left_attr, NULL, $1, NOAGGR);
 			RelAttr right_attr;
-			relation_attr_init(&right_attr, NULL, $3);
+			relation_attr_init(&right_attr, NULL, $3, NOAGGR);
 
 			Condition condition;
 			condition_init(&condition, CONTEXT->comp, 1, &left_attr, NULL, 1, &right_attr, NULL);
@@ -472,7 +526,7 @@ condition:
 		{
 			Value *left_value = &CONTEXT->values[CONTEXT->value_length - 1];
 			RelAttr right_attr;
-			relation_attr_init(&right_attr, NULL, $3);
+			relation_attr_init(&right_attr, NULL, $3, NOAGGR);
 
 			Condition condition;
 			condition_init(&condition, CONTEXT->comp, 0, NULL, left_value, 1, &right_attr, NULL);
@@ -493,7 +547,7 @@ condition:
     |ID DOT ID comOp value
 		{
 			RelAttr left_attr;
-			relation_attr_init(&left_attr, $1, $3);
+			relation_attr_init(&left_attr, $1, $3, NOAGGR);
 			Value *right_value = &CONTEXT->values[CONTEXT->value_length - 1];
 
 			Condition condition;
@@ -516,7 +570,7 @@ condition:
 			Value *left_value = &CONTEXT->values[CONTEXT->value_length - 1];
 
 			RelAttr right_attr;
-			relation_attr_init(&right_attr, $3, $5);
+			relation_attr_init(&right_attr, $3, $5, NOAGGR);
 
 			Condition condition;
 			condition_init(&condition, CONTEXT->comp, 0, NULL, left_value, 1, &right_attr, NULL);
@@ -535,9 +589,9 @@ condition:
     |ID DOT ID comOp ID DOT ID
 		{
 			RelAttr left_attr;
-			relation_attr_init(&left_attr, $1, $3);
+			relation_attr_init(&left_attr, $1, $3, NOAGGR);
 			RelAttr right_attr;
-			relation_attr_init(&right_attr, $5, $7);
+			relation_attr_init(&right_attr, $5, $7, NOAGGR);
 
 			Condition condition;
 			condition_init(&condition, CONTEXT->comp, 1, &left_attr, NULL, 1, &right_attr, NULL);

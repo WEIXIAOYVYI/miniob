@@ -27,12 +27,13 @@ SelectStmt::~SelectStmt()
   }
 }
 
-static void wildcard_fields(Table *table, std::vector<Field> &field_metas)
+static void wildcard_fields(Table *table, std::vector<Field> &field_metas, std::vector<AggregationType> &query_aggrs, AggregationType aggr)
 {
   const TableMeta &table_meta = table->table_meta();
   const int field_num = table_meta.field_num();
   for (int i = table_meta.sys_field_num(); i < field_num; i++) {
     field_metas.push_back(Field(table, table_meta.field(i)));
+    query_aggrs.push_back(aggr);
   }
 }
 
@@ -65,12 +66,14 @@ RC SelectStmt::create(Db *db, const Selects &select_sql, Stmt *&stmt)
   
   // collect query fields in `select` statement
   std::vector<Field> query_fields;
+  std::vector<AggregationType> query_aggrs;
   for (int i = select_sql.attr_num - 1; i >= 0; i--) {
     const RelAttr &relation_attr = select_sql.attributes[i];
+    const AggregationType aggregationType = relation_attr.aggregation_type;
 
     if (common::is_blank(relation_attr.relation_name) && 0 == strcmp(relation_attr.attribute_name, "*")) {
       for (Table *table : tables) {
-        wildcard_fields(table, query_fields);
+        wildcard_fields(table, query_fields, query_aggrs, aggregationType);
       }
 
     } else if (!common::is_blank(relation_attr.relation_name)) { // TODO
@@ -83,7 +86,7 @@ RC SelectStmt::create(Db *db, const Selects &select_sql, Stmt *&stmt)
           return RC::SCHEMA_FIELD_MISSING;
         }
         for (Table *table : tables) {
-          wildcard_fields(table, query_fields);
+          wildcard_fields(table, query_fields, query_aggrs, aggregationType);
         }
       } else {
         auto iter = table_map.find(table_name);
@@ -94,7 +97,7 @@ RC SelectStmt::create(Db *db, const Selects &select_sql, Stmt *&stmt)
 
         Table *table = iter->second;
         if (0 == strcmp(field_name, "*")) {
-          wildcard_fields(table, query_fields);
+          wildcard_fields(table, query_fields, query_aggrs, aggregationType);
         } else {
           const FieldMeta *field_meta = table->table_meta().field(field_name);
           if (nullptr == field_meta) {
@@ -103,6 +106,7 @@ RC SelectStmt::create(Db *db, const Selects &select_sql, Stmt *&stmt)
           }
 
         query_fields.push_back(Field(table, field_meta));
+        query_aggrs.push_back(aggregationType);
         }
       }
     } else {
@@ -119,6 +123,7 @@ RC SelectStmt::create(Db *db, const Selects &select_sql, Stmt *&stmt)
       }
 
       query_fields.push_back(Field(table, field_meta));
+      query_aggrs.push_back(aggregationType);
     }
   }
 
@@ -142,6 +147,7 @@ RC SelectStmt::create(Db *db, const Selects &select_sql, Stmt *&stmt)
   SelectStmt *select_stmt = new SelectStmt();
   select_stmt->tables_.swap(tables);
   select_stmt->query_fields_.swap(query_fields);
+  select_stmt->query_aggrs_.swap(query_aggrs);
   select_stmt->filter_stmt_ = filter_stmt;
   stmt = select_stmt;
   return RC::SUCCESS;

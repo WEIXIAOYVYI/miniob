@@ -224,6 +224,26 @@ RC Db::recover()
   return rc;
 }
 
+RC Db::drop_table(const char *table_name){
+  RC rc = RC::SUCCESS;
+  if (opened_tables_.count(table_name) == 0) {
+    LOG_WARN("Table %s has not been opened before.", table_name);
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+
+  Table *table = opened_tables_[table_name];
+  rc = table->destroy(path_.c_str());
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to drop table %s.", table_name);
+    return rc;
+  }
+
+  opened_tables_.erase(table_name);
+  delete table;
+  LOG_INFO("Drop table success. table name=%s", table_name);
+  return RC::SUCCESS;
+}
+
 CLogManager *Db::get_clog_manager() {
   return clog_manager_;
 }

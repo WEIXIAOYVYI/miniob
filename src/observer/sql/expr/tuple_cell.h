@@ -39,6 +39,32 @@ public:
 
   int compare(const TupleCell &other) const;
 
+  void zero(const AttrType &attr, int *acc_int, float *acc_float) {
+    if (attr == INTS) {
+      *acc_int = 0;
+      attr_type_ = INTS;
+      data_ = reinterpret_cast<char*>(acc_int);
+    } else if (attr == FLOATS) {
+      *acc_float = 0;
+      attr_type_ = FLOATS;
+      data_ = reinterpret_cast<char*>(acc_float);
+    }
+  }
+
+  void add_one(int* acc_int) {
+    (*acc_int)++;
+    data_ = reinterpret_cast<char*>(acc_int);
+  }
+
+  void avg(const TupleCell &other, int count, float* acc_float) {
+    if (other.attr_type() == INTS) {
+      *acc_float= ((*acc_float) * count + *(int*)other.data()) / (count + 1);
+    } else if (other.attr_type() == FLOATS) {
+      *acc_float= ((*acc_float) * count + *(float*)other.data()) / (count + 1);
+    }
+    data_ = reinterpret_cast<char*>(acc_float);
+  }
+
   const char *data() const
   {
     return data_;

@@ -59,6 +59,7 @@ public:
   RC insert_record(Trx *trx, int value_num, const Value *values);
   RC update_record(Trx *trx, const char *attribute_name, const Value *value, int condition_num,
       const Condition conditions[], int *updated_count);
+  RC update_record(Trx *trx,Record * record);
   RC delete_record(Trx *trx, ConditionFilter *filter, int *deleted_count);
   RC delete_record(Trx *trx, Record *record);
   RC recover_delete_record(Record *record);
@@ -74,6 +75,13 @@ public:
   {
     return record_handler_;
   }
+/*
+*让表销毁资源
+* @param dir 表名？/表所在的文件夹？
+*/
+
+public:
+  RC destroy(const char *dir);
 
 public:
   const char *name() const;

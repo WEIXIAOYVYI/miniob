@@ -28,10 +28,12 @@ See the Mulan PSL v2 for more details. */
 #include "event/session_event.h"
 #include "sql/expr/tuple.h"
 #include "sql/operator/table_scan_operator.h"
+#include "sql/operator/update_operator.h"
 #include "sql/operator/index_scan_operator.h"
 #include "sql/operator/predicate_operator.h"
 #include "sql/operator/delete_operator.h"
 #include "sql/operator/project_operator.h"
+#include "sql/operator/aggregation_operator.h"
 #include "sql/stmt/stmt.h"
 #include "sql/stmt/select_stmt.h"
 #include "sql/stmt/update_stmt.h"
@@ -143,7 +145,7 @@ void ExecuteStage::handle_request(common::StageEvent *event)
       do_insert(sql_event);
     } break;
     case StmtType::UPDATE: {
-      //do_update((UpdateStmt *)stmt, session_event);
+      do_update(sql_event);
     } break;
     case StmtType::DELETE: {
       do_delete(sql_event);
@@ -169,9 +171,11 @@ void ExecuteStage::handle_request(common::StageEvent *event)
     case SCF_DESC_TABLE: {
       do_desc_table(sql_event);
     } break;
-
-    case SCF_DROP_TABLE:
-    case SCF_DROP_INDEX:
+    case SCF_DROP_TABLE: {
+      do_drop_table(sql_event);
+    } break;
+    
+    case SCF_DROP_INDEX:{} break;
     case SCF_LOAD_DATA: {
       default_storage_stage_->handle_event(event);
     } break;
@@ -229,6 +233,25 @@ void end_trx_if_need(Session *session, Trx *trx, bool all_right)
 }
 
 void print_tuple_header(std::ostream &os, const ProjectOperator &oper)
+{
+  const int cell_num = oper.tuple_cell_num();
+  const TupleCellSpec *cell_spec = nullptr;
+  for (int i = 0; i < cell_num; i++) {
+    oper.tuple_cell_spec_at(i, cell_spec);
+    if (i != 0) {
+      os << " | ";
+    }
+
+    if (cell_spec->alias()) {
+      os << cell_spec->alias();
+    }
+  }
+
+  if (cell_num > 0) {
+    os << '\n';
+  }
+}
+void print_tuple_header(std::ostream &os, const AggregationOperator &oper)
 {
   const int cell_num = oper.tuple_cell_num();
   const TupleCellSpec *cell_spec = nullptr;
@@ -409,25 +432,45 @@ RC ExecuteStage::do_select(SQLStageEvent *sql_event)
 
   DEFER([&] () {delete scan_oper;});
 
+  Operator *root_oper;
   PredicateOperator pred_oper(select_stmt->filter_stmt());
   pred_oper.add_child(scan_oper);
   ProjectOperator project_oper;
   project_oper.add_child(&pred_oper);
-  for (const Field &field : select_stmt->query_fields()) {
-    project_oper.add_projection(field.table(), field.meta());
+  AggregationOperator aggr_oper;
+  if (select_stmt->query_aggrs()[0] != NOAGGR) {
+    aggr_oper.add_child(&project_oper);
+    root_oper = static_cast<AggregationOperator*>(&aggr_oper);
+  } else {
+    root_oper = static_cast<ProjectOperator*>(&project_oper);
   }
-  rc = project_oper.open();
+
+  auto field_size = select_stmt->query_fields().size();
+  for (auto i = 0;i < field_size;i++) {
+    auto field = select_stmt->query_fields()[i];
+    auto aggr = select_stmt->query_aggrs()[i];
+    project_oper.add_projection(field.table(), field.meta());
+    if (aggr != NOAGGR) {
+      aggr_oper.add_aggr(field.meta(), aggr);
+    }
+  }
+  rc = root_oper->open();
   if (rc != RC::SUCCESS) {
     LOG_WARN("failed to open operator");
     return rc;
   }
 
   std::stringstream ss;
-  print_tuple_header(ss, project_oper);
-  while ((rc = project_oper.next()) == RC::SUCCESS) {
+  if (select_stmt->query_aggrs()[0] != NOAGGR) {
+    print_tuple_header(ss, aggr_oper);
+  } else {
+    print_tuple_header(ss, project_oper);
+  }
+
+  while ((rc = root_oper->next()) == RC::SUCCESS) {
     // get current record
     // write to response
-    Tuple * tuple = project_oper.current_tuple();
+    Tuple * tuple = root_oper->current_tuple();
     if (nullptr == tuple) {
       rc = RC::INTERNAL;
       LOG_WARN("failed to get current record. rc=%s", strrc(rc));
@@ -440,9 +483,9 @@ RC ExecuteStage::do_select(SQLStageEvent *sql_event)
 
   if (rc != RC::RECORD_EOF) {
     LOG_WARN("something wrong while iterate operator. rc=%s", strrc(rc));
-    project_oper.close();
+    root_oper->close();
   } else {
-    rc = project_oper.close();
+    rc = root_oper->close();
   }
   session_event->set_response(ss.str());
   return rc;
@@ -571,6 +614,56 @@ RC ExecuteStage::do_insert(SQLStageEvent *sql_event)
   return rc;
 }
 
+RC ExecuteStage::do_update(SQLStageEvent *sql_event)
+{
+  
+  Stmt *stmt = sql_event->stmt();
+  SessionEvent *session_event = sql_event->session_event();
+  Session *session = session_event->session();
+  Db *db = session->get_current_db();
+  Trx *trx = session->current_trx();
+  CLogManager *clog_manager = db->get_clog_manager();
+
+  if (stmt == nullptr) {
+    LOG_WARN("cannot find statement");
+    return RC::GENERIC_ERROR;
+  }
+
+  UpdateStmt *update_stmt = (UpdateStmt *)stmt;
+  TableScanOperator scan_oper(update_stmt->table());
+  PredicateOperator pred_oper(update_stmt->filter_stmt());
+  pred_oper.add_child(&scan_oper);
+  UpdateOperator update_oper(update_stmt, trx);
+  update_oper.add_child(&pred_oper);
+
+  
+  RC rc = update_oper.open();
+  
+  if (rc != RC::SUCCESS) {
+    session_event->set_response("FAILURE\n");
+  } else {
+    session_event->set_response("SUCCESS\n");
+    if (!session->is_trx_multi_operation_mode()) {
+      CLogRecord *clog_record = nullptr;
+      rc = clog_manager->clog_gen_record(CLogType::REDO_MTR_COMMIT, trx->get_current_id(), clog_record);
+      if (rc != RC::SUCCESS || clog_record == nullptr) {
+        session_event->set_response("FAILURE\n");
+        return rc;
+      }
+
+      rc = clog_manager->clog_append_record(clog_record);
+      if (rc != RC::SUCCESS) {
+        session_event->set_response("FAILURE\n");
+        return rc;
+      } 
+
+      trx->next_current_id();
+      session_event->set_response("SUCCESS\n");
+    }
+  }
+  return rc;
+}
+
 RC ExecuteStage::do_delete(SQLStageEvent *sql_event)
 {
   Stmt *stmt = sql_event->stmt();
@@ -690,5 +783,20 @@ RC ExecuteStage::do_clog_sync(SQLStageEvent *sql_event)
     session_event->set_response("SUCCESS\n");
   }
 
+  return rc;
+}
+
+RC ExecuteStage::do_drop_table(SQLStageEvent *sql_event)
+{
+  RC rc = RC::SUCCESS;
+  SessionEvent *session_event = sql_event->session_event();
+  Db *db = session_event->session()->get_current_db();
+  const char *table_name = sql_event->query()->sstr.drop_table.relation_name;
+  rc = db->drop_table(table_name);
+  if (rc != RC::SUCCESS) {
+    session_event->set_response("FAILURE\n");
+  } else {
+    session_event->set_response("SUCCESS\n");
+  }
   return rc;
 }
